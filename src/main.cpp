@@ -1,8 +1,9 @@
 #include "hal_conf_extra.h"
-#include <Arduino.h>
-#include <STM32FreeRTOS.h>
-#include "Encoder.h"
 #include "config.h"
+#include <Arduino.h>
+// #include <STM32FreeRTOS.h>
+#include "Encoder.h"
+#include "MedianFilter.h"
 
 uint8_t encoderData1[8];
 uint8_t encoderData2[8];
@@ -19,6 +20,9 @@ bool waitingEncoder3 = false;
 Encoder Encoder1(&Serial1, ENCODER_REN1, ENCODER_DE1);
 Encoder Encoder2(&Serial2, ENCODER_REN2, ENCODER_DE2);
 Encoder Encoder3(&Serial3, ENCODER_REN3, ENCODER_DE3);
+MedianFilter filter1(5);
+MedianFilter filter2(5);
+MedianFilter filter3(5);
 // Encoder Encoder1(&EncoderSerial1, ENCODER_REN1, ENCODER_DE1);
 // Encoder Encoder2(&EncoderSerial2, ENCODER_REN2, ENCODER_DE2);
 // Encoder Encoder3(&EncoderSerial3, ENCODER_REN3, ENCODER_DE3);
@@ -147,17 +151,32 @@ void RequestEncoderLoop() {
 
 void ResponseEncoderLoop() {
   if (Encoder1.pSerial->available() >= 8) {
-    Encoder1.pSerial->readBytes(encoderData1, 8);
+    uint8_t data[8];
+    uint32_t as = 0;
+    Encoder1.pSerial->readBytes(data, 8);
+    as = ((uint32_t)(data[0])) | ((uint32_t)(data[1]) << 8) |
+         ((uint32_t)(data[2]) << 16);
+    filter1.addValue(as);
     waitingEncoder1 = false;
   }
 
   if (Encoder2.pSerial->available() >= 8) {
-    Encoder2.pSerial->readBytes(encoderData2, 8);
+    uint8_t data[8];
+    uint32_t as = 0;
+    Encoder2.pSerial->readBytes(data, 8);
+    as = ((uint32_t)(data[0])) | ((uint32_t)(data[1]) << 8) |
+         ((uint32_t)(data[2]) << 16);
+    filter2.addValue(as);
     waitingEncoder2 = false;
   }
 
   if (Encoder3.pSerial->available() >= 8) {
-    Encoder3.pSerial->readBytes(encoderData3, 8);
+    uint8_t data[8];
+    uint32_t as = 0;
+    Encoder3.pSerial->readBytes(data, 8);
+    as = ((uint32_t)(data[0])) | ((uint32_t)(data[1]) << 8) |
+         ((uint32_t)(data[2]) << 16);
+    filter3.addValue(as);
     waitingEncoder3 = false;
   }
 }
@@ -167,52 +186,63 @@ void ResponseMasterLoop() {
     uint8_t code = 0;
     Serial6.readBytes(&code, 1);
     if (code == 1) {
-      Serial6.write(encoderData1, 8);
-      Serial6.write(encoderData2, 8);
-      Serial6.write(encoderData3, 8);
+      uint32_t value1 = filter1.getMedian();
+      uint32_t value2 = filter2.getMedian();
+      uint32_t value3 = filter3.getMedian();
+
+      uint8_t data1[3] = {(uint8_t)(value1), (uint8_t)(value1 >> 8),
+                          (uint8_t)(value1 >> 16)};
+      uint8_t data2[3] = {(uint8_t)(value2), (uint8_t)(value2 >> 8),
+                          (uint8_t)(value2 >> 16)};
+      uint8_t data3[3] = {(uint8_t)(value3), (uint8_t)(value3 >> 8),
+                          (uint8_t)(value3 >> 16)};
+
+      Serial6.write(data1, 3);
+      Serial6.write(data2, 3);
+      Serial6.write(data3, 3);
     }
   }
 }
 
-void TaskReadEncoder(void* pvParameters) {
-  for (;;) {
-    Encoder1.requestData();
-    Encoder2.requestData();
-    Encoder3.requestData();
+// void TaskReadEncoder(void* pvParameters) {
+//   for (;;) {
+//     Encoder1.requestData();
+//     Encoder2.requestData();
+//     Encoder3.requestData();
 
-    while (Encoder1.pSerial->available() < 8)
-      ;
-    Encoder1.pSerial->readBytes(encoderData1, 8);
+//     while (Encoder1.pSerial->available() < 8)
+//       ;
+//     Encoder1.pSerial->readBytes(encoderData1, 8);
 
-    while (Encoder2.pSerial->available() < 8)
-      ;
-    Encoder2.pSerial->readBytes(encoderData2, 8);
+//     while (Encoder2.pSerial->available() < 8)
+//       ;
+//     Encoder2.pSerial->readBytes(encoderData2, 8);
 
-    while (Encoder3.pSerial->available() < 8)
-      ;
-    Encoder3.pSerial->readBytes(encoderData3, 8);
-  }
-}
+//     while (Encoder3.pSerial->available() < 8)
+//       ;
+//     Encoder3.pSerial->readBytes(encoderData3, 8);
+//   }
+// }
 
-void TaskResponseMaster(void* pvParameters) {
-  for (;;) {
-    if (Serial6.available()) {
-      uint8_t code = 0;
-      Serial6.readBytes(&code, 1);
-      if (code == 1) {
-        Serial6.write(encoderData1, 8);
-        Serial6.write(encoderData2, 8);
-        Serial6.write(encoderData3, 8);
-      }
-    }
-  }
-}
+// void TaskResponseMaster(void* pvParameters) {
+//   for (;;) {
+//     if (Serial6.available()) {
+//       uint8_t code = 0;
+//       Serial6.readBytes(&code, 1);
+//       if (code == 1) {
+//         Serial6.write(encoderData1, 8);
+//         Serial6.write(encoderData2, 8);
+//         Serial6.write(encoderData3, 8);
+//       }
+//     }
+//   }
+// }
 
-void TaskBlink(void* pvParameters) {
-  for (;;) {
-    digitalWrite(BUILTIN_LED, HIGH);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    digitalWrite(BUILTIN_LED, LOW);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-  }
-}
+// void TaskBlink(void* pvParameters) {
+//   for (;;) {
+//     digitalWrite(BUILTIN_LED, HIGH);
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
+//     digitalWrite(BUILTIN_LED, LOW);
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
+//   }
+// }
