@@ -18,7 +18,7 @@ class Encoder {
  public:
   Encoder(HardwareSerial* serial, uint8_t renPin, uint8_t dePin);
   ~Encoder();
-  void requestData();
+  uint32_t requestData();
 
   uint8_t ren;
   uint8_t de;

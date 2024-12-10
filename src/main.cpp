@@ -1,38 +1,48 @@
-#include "hal_conf_extra.h"
-#include "config.h"
-#include <Arduino.h>
-// #include <STM32FreeRTOS.h>
 #include "Encoder.h"
 #include "MedianFilter.h"
+#include "config.h"
+#include "hal_conf_extra.h"
+#include <Arduino.h>
 
-uint8_t encoderData1[8];
-uint8_t encoderData2[8];
-uint8_t encoderData3[8];
-bool waitingEncoder1 = false;
-bool waitingEncoder2 = false;
-bool waitingEncoder3 = false;
+// #define DEBUG_SAMPLE_FREQ
+#define DEBUG_ONE_ENCODER
+#define DEBUG_SEND_DATA
 
-// HardwareSerial EncoderSerial1(ENCODER_RX1, ENCODER_TX1);
-// HardwareSerial EncoderSerial2(ENCODER_RX2, ENCODER_TX2);
-// HardwareSerial EncoderSerial3(ENCODER_RX3, ENCODER_TX3);
-// HardwareSerial MasterSerial(MASTER485_RX, MASTER485_TX);
+#define MasterSerial Serial6
+
+// uint8_t encoderData1[8];
+// uint8_t encoderData2[8];
+// uint8_t encoderData3[8];
+static bool waitingEncoder1 = false;
+static bool waitingEncoder2 = false;
+static bool waitingEncoder3 = false;
+
+// 测试采样频率
+#ifdef DEBUG_SAMPLE_FREQ
+uint32_t lastSampleTime;
+uint32_t beginSampleTime = 0;
+uint32_t endSampleTime = 0;
+#endif
 
 Encoder Encoder1(&Serial1, ENCODER_REN1, ENCODER_DE1);
+#ifndef DEBUG_ONE_ENCODER
 Encoder Encoder2(&Serial2, ENCODER_REN2, ENCODER_DE2);
 Encoder Encoder3(&Serial3, ENCODER_REN3, ENCODER_DE3);
+#endif
+
 MedianFilter filter1(5);
+#ifndef DEBUG_ONE_ENCODER
 MedianFilter filter2(5);
 MedianFilter filter3(5);
-// Encoder Encoder1(&EncoderSerial1, ENCODER_REN1, ENCODER_DE1);
-// Encoder Encoder2(&EncoderSerial2, ENCODER_REN2, ENCODER_DE2);
-// Encoder Encoder3(&EncoderSerial3, ENCODER_REN3, ENCODER_DE3);
+#endif
 
-void TaskReadEncoder(void* pvParameters);
-void TaskResponseMaster(void* pvParameters);
-void TaskBlink(void* pvParameters);
 void RequestEncoderLoop();
 void ResponseEncoderLoop();
 void ResponseMasterLoop();
+void RequestEncoderLoop_block();
+void BlinkLoop();
+// void enableTX(int renPin, int dePin);
+// void enableRX(int renPin, int dePin);
 
 /**
  * @brief System Clock Configuration
@@ -76,173 +86,277 @@ extern "C" void SystemClock_Config(void) {
   }
 }
 
+void TestResponseMasterLoop() {
+  while (Serial6.available()) {
+    uint8_t code = 0;
+    Serial6.readBytes(&code, 1);
+
+    digitalWrite(ENCODER_DE1, HIGH);
+    digitalWrite(ENCODER_REN1, HIGH);
+    Serial1.write(code);
+    Serial1.flush();
+    digitalWrite(ENCODER_DE1, LOW);
+    digitalWrite(ENCODER_REN1, LOW);
+    delay(10);
+    while (Serial1.available()) {
+      byte incomingByte = Serial1.read();
+      digitalWrite(MASTER485_DE, HIGH);
+      digitalWrite(MASTER485_REN, HIGH);
+      Serial6.write(incomingByte);
+      Serial6.flush();
+      digitalWrite(MASTER485_DE, LOW);
+      digitalWrite(MASTER485_REN, LOW);
+    }
+  }
+}
+
 void setup() {
-  // put your setup code here, to run once:
   pinMode(BUILTIN_LED, OUTPUT);
 
   pinMode(ENCODER_REN1, OUTPUT);
   pinMode(ENCODER_DE1, OUTPUT);
+
+#ifndef DEBUG_ONE_ENCODER
   pinMode(ENCODER_REN2, OUTPUT);
   pinMode(ENCODER_DE2, OUTPUT);
   pinMode(ENCODER_REN3, OUTPUT);
   pinMode(ENCODER_DE3, OUTPUT);
+#endif
+
+  pinMode(MASTER485_REN, OUTPUT);
+  pinMode(MASTER485_DE, OUTPUT);
 
   digitalWrite(ENCODER_REN1, LOW);
   digitalWrite(ENCODER_DE1, LOW);
+
+#ifndef DEBUG_ONE_ENCODER
   digitalWrite(ENCODER_REN2, LOW);
   digitalWrite(ENCODER_DE2, LOW);
   digitalWrite(ENCODER_REN3, LOW);
   digitalWrite(ENCODER_DE3, LOW);
+#endif
+
+  digitalWrite(MASTER485_REN, LOW);
+  digitalWrite(MASTER485_DE, LOW);
 
   Serial1.begin(2500000);
+
+#ifndef DEBUG_ONE_ENCODER
   Serial2.begin(2500000);
   Serial3.begin(2500000);
+#endif
   Serial6.begin(115200);
-  // EncoderSerial1.begin(2500000);
-  // EncoderSerial2.begin(2500000);
-  // EncoderSerial3.begin(2500000);
-  // MasterSerial.begin(115200);
 
+  waitingEncoder1 = false;
+
+#ifndef DEBUG_ONE_ENCODER
+  waitingEncoder2 = false;
+  waitingEncoder3 = false;
+#endif
+
+#ifndef DEBUG_ONE_ENCODER
   while (!Serial1 || !Serial2 || !Serial3 || !Serial6)
     ;
-  // while (!EncoderSerial1 || !EncoderSerial2 || !EncoderSerial3 ||
-  // !MasterSerial)
-  //   ;
-
-  // xTaskCreate(TaskReadEncoder, "TaskReadEncoder", 128, NULL, 1, NULL);
-  // xTaskCreate(TaskResponseMaster, "TaskResponseMaster", 128, NULL, 2, NULL);
-  // xTaskCreate(TaskBlink, "TaskBlink", 128, NULL, 1, NULL);
-
-  // vTaskStartScheduler();
-  // Serial6.println("Error: Insufficient RAM");
+#else
+  while (!Serial1 || !Serial6)
+    ;
+#endif
 }
 
 void loop() {
-  RequestEncoderLoop();
-  ResponseEncoderLoop();
+  RequestEncoderLoop_block();
   ResponseMasterLoop();
-  // digitalWrite(BUILTIN_LED, HIGH);
-  // delay(1000);
-  // digitalWrite(BUILTIN_LED, LOW);
-  // delay(1000);
+  BlinkLoop();
+  // TestResponseMasterLoop();
+  // RequestEncoderLoop();
+  // ResponseEncoderLoop();
+}
+
+void RequestEncoderLoop_block() {
+  Encoder1.requestData();
+#ifndef DEBUG_ONE_ENCODER
+  Encoder2.requestData();
+  Encoder3.requestData();
+#endif
+
+  // delayMicroseconds(20);
+
+  const int byteCount = 6;
+  uint8_t data[byteCount] = {0};
+  uint32_t as = 0;
+  // while (Encoder1.pSerial->available() >= byteCount) {
+  Encoder1.pSerial->readBytes(data, byteCount);
+
+#ifdef DEBUG_SEND_DATA
+  digitalWrite(MASTER485_REN, HIGH);
+  digitalWrite(MASTER485_DE, HIGH);
+  Serial6.write(data, byteCount);
+  Serial6.flush();
+  digitalWrite(MASTER485_REN, LOW);
+  digitalWrite(MASTER485_DE, LOW);
+  delay(1000);
+#endif
+
+  as = ((uint32_t)(data[2])) | ((uint32_t)(data[3]) << 8) |
+       ((uint32_t)(data[4]) << 16);
+  filter1.addValue(as);
+  // }
+
+#ifndef DEBUG_ONE_ENCODER
+  // while (Encoder2.pSerial->available() >= byteCount) {
+  // uint8_t data[byteCount] = {0};
+  // uint32_t as = 0;
+  Encoder2.pSerial->readBytes(data, byteCount);
+  as = ((uint32_t)(data[2])) | ((uint32_t)(data[3]) << 8) |
+       ((uint32_t)(data[4]) << 16);
+  filter2.addValue(as);
+  // }
+
+  // while (Encoder3.pSerial->available() >= byteCount) {
+  // uint8_t data[byteCount] = {0};
+  // uint32_t as = 0;
+  Encoder3.pSerial->readBytes(data, byteCount);
+  as = ((uint32_t)(data[2])) | ((uint32_t)(data[3]) << 8) |
+       ((uint32_t)(data[4]) << 16);
+  filter3.addValue(as);
+// }
+#endif
+
+  // DEBUG
+
+  // uint32_t value1 = filter1.getMedian();
+  // uint32_t value2 = filter2.getMedian();
+  // uint32_t value3 = filter3.getMedian();
+
+  // // uint8_t data1[3] = {(uint8_t)(value1), (uint8_t)(value1 >> 8),
+  // //                     (uint8_t)(value1 >> 16)};
+  // // uint8_t data2[3] = {(uint8_t)(value2), (uint8_t)(value2 >> 8),
+  // //                     (uint8_t)(value2 >> 16)};
+  // // uint8_t data3[3] = {(uint8_t)(value3), (uint8_t)(value3 >> 8),
+  // //                     (uint8_t)(value3 >> 16)};
 
   // digitalWrite(MASTER485_REN, HIGH);
   // digitalWrite(MASTER485_DE, HIGH);
-  // MasterSerial.println("Hello World");
+  // // Serial6.write(data1, 3);
+  // // Serial6.write(data2, 3);
+  // // Serial6.write(data3, 3);
+  // // double angle1 = (double)value1 / (double)pow(2, 19) * 360.0;
+  // // double angle2 = (double)value2 / (double)pow(2, 19) * 360.0;
+  // // double angle3 = (double)value3 / (double)pow(2, 19) * 360.0;
+  // // Serial6.printf("%f, %f, %f\n", angle1, angle2, angle3);
+  // Serial6.printf("%d, %d, %d\n", value1, value2, value3);
+
+  // Serial6.flush();
   // digitalWrite(MASTER485_REN, LOW);
   // digitalWrite(MASTER485_DE, LOW);
-  // delay(1000);
+
+  // DEBUG END
+
+#ifdef DEBUG_SAMPLE_FREQ
+  endSampleTime = micros();
+  uint32_t samplePeriod = endSampleTime - beginSampleTime;
+  digitalWrite(MASTER485_DE, HIGH);
+  digitalWrite(MASTER485_REN, HIGH);
+  MasterSerial.print(beginSampleTime);
+  MasterSerial.print(", ");
+  MasterSerial.println(samplePeriod);
+  MasterSerial.flush();
+  digitalWrite(MASTER485_DE, LOW);
+  digitalWrite(MASTER485_REN, LOW);
+  beginSampleTime = micros();
+#endif
 }
 
 void RequestEncoderLoop() {
-  if (!waitingEncoder1) {
+  if (waitingEncoder1 == false && waitingEncoder2 == false &&
+      waitingEncoder3 == false) {
     Encoder1.requestData();
-    waitingEncoder1 = true;
-  }
-  if (!waitingEncoder2) {
+#ifndef DEBUG_ONE_ENCODER
     Encoder2.requestData();
-    waitingEncoder2 = true;
-  }
-  if (!waitingEncoder3) {
     Encoder3.requestData();
+#endif
+    waitingEncoder1 = true;
+#ifndef DEBUG_ONE_ENCODER
+    waitingEncoder2 = true;
     waitingEncoder3 = true;
+#endif
   }
 }
 
 void ResponseEncoderLoop() {
-  if (Encoder1.pSerial->available() >= 8) {
-    uint8_t data[8];
+  const int byteCount = 6;
+  if (Encoder1.pSerial->available() >= byteCount) {
+    uint8_t data[byteCount] = {0};
     uint32_t as = 0;
-    Encoder1.pSerial->readBytes(data, 8);
-    as = ((uint32_t)(data[0])) | ((uint32_t)(data[1]) << 8) |
-         ((uint32_t)(data[2]) << 16);
+    Encoder1.pSerial->readBytes(data, byteCount);
+    as = ((uint32_t)(data[2])) | ((uint32_t)(data[3]) << 8) |
+         ((uint32_t)(data[4]) << 16);
     filter1.addValue(as);
     waitingEncoder1 = false;
   }
 
-  if (Encoder2.pSerial->available() >= 8) {
-    uint8_t data[8];
+#ifndef DEBUG_ONE_ENCODER
+  if (Encoder2.pSerial->available() >= byteCount) {
+    uint8_t data[byteCount];
     uint32_t as = 0;
-    Encoder2.pSerial->readBytes(data, 8);
-    as = ((uint32_t)(data[0])) | ((uint32_t)(data[1]) << 8) |
-         ((uint32_t)(data[2]) << 16);
+    Encoder2.pSerial->readBytes(data, byteCount);
+    as = ((uint32_t)(data[2])) | ((uint32_t)(data[3]) << 8) |
+         ((uint32_t)(data[4]) << 16);
     filter2.addValue(as);
     waitingEncoder2 = false;
   }
 
-  if (Encoder3.pSerial->available() >= 8) {
-    uint8_t data[8];
+  if (Encoder3.pSerial->available() >= byteCount) {
+    uint8_t data[byteCount];
     uint32_t as = 0;
-    Encoder3.pSerial->readBytes(data, 8);
-    as = ((uint32_t)(data[0])) | ((uint32_t)(data[1]) << 8) |
-         ((uint32_t)(data[2]) << 16);
+    Encoder3.pSerial->readBytes(data, byteCount);
+    as = ((uint32_t)(data[2])) | ((uint32_t)(data[3]) << 8) |
+         ((uint32_t)(data[4]) << 16);
     filter3.addValue(as);
     waitingEncoder3 = false;
   }
+#endif
 }
 
 void ResponseMasterLoop() {
   if (Serial6.available()) {
     uint8_t code = 0;
     Serial6.readBytes(&code, 1);
-    if (code == 1) {
+
+    if (code == 0x01) {
       uint32_t value1 = filter1.getMedian();
+#ifndef DEBUG_ONE_ENCODER
       uint32_t value2 = filter2.getMedian();
       uint32_t value3 = filter3.getMedian();
+#endif
 
       uint8_t data1[3] = {(uint8_t)(value1), (uint8_t)(value1 >> 8),
                           (uint8_t)(value1 >> 16)};
+#ifndef DEBUG_ONE_ENCODER
       uint8_t data2[3] = {(uint8_t)(value2), (uint8_t)(value2 >> 8),
                           (uint8_t)(value2 >> 16)};
       uint8_t data3[3] = {(uint8_t)(value3), (uint8_t)(value3 >> 8),
                           (uint8_t)(value3 >> 16)};
+#endif
 
+      digitalWrite(MASTER485_REN, HIGH);
+      digitalWrite(MASTER485_DE, HIGH);
       Serial6.write(data1, 3);
+#ifndef DEBUG_ONE_ENCODER
       Serial6.write(data2, 3);
       Serial6.write(data3, 3);
+#endif
+      Serial6.flush();
+      digitalWrite(MASTER485_REN, LOW);
+      digitalWrite(MASTER485_DE, LOW);
     }
   }
 }
 
-// void TaskReadEncoder(void* pvParameters) {
-//   for (;;) {
-//     Encoder1.requestData();
-//     Encoder2.requestData();
-//     Encoder3.requestData();
-
-//     while (Encoder1.pSerial->available() < 8)
-//       ;
-//     Encoder1.pSerial->readBytes(encoderData1, 8);
-
-//     while (Encoder2.pSerial->available() < 8)
-//       ;
-//     Encoder2.pSerial->readBytes(encoderData2, 8);
-
-//     while (Encoder3.pSerial->available() < 8)
-//       ;
-//     Encoder3.pSerial->readBytes(encoderData3, 8);
-//   }
-// }
-
-// void TaskResponseMaster(void* pvParameters) {
-//   for (;;) {
-//     if (Serial6.available()) {
-//       uint8_t code = 0;
-//       Serial6.readBytes(&code, 1);
-//       if (code == 1) {
-//         Serial6.write(encoderData1, 8);
-//         Serial6.write(encoderData2, 8);
-//         Serial6.write(encoderData3, 8);
-//       }
-//     }
-//   }
-// }
-
-// void TaskBlink(void* pvParameters) {
-//   for (;;) {
-//     digitalWrite(BUILTIN_LED, HIGH);
-//     vTaskDelay(1000 / portTICK_PERIOD_MS);
-//     digitalWrite(BUILTIN_LED, LOW);
-//     vTaskDelay(1000 / portTICK_PERIOD_MS);
-//   }
-// }
+void BlinkLoop() {
+  static uint32_t lastTime = 0;
+  if (millis() - lastTime > 1000) {
+    digitalToggle(BUILTIN_LED);
+    lastTime = millis();
+  }
+}
