@@ -2,6 +2,7 @@
 #define ENCODER_H
 
 #include <Arduino.h>
+#include "Crc.h"
 
 // const uint8_t DataID0 = 0b00000010;
 
@@ -12,19 +13,28 @@ enum DataID: uint8_t {
   DataID3 = 0b00011010
 };
 
+enum EncoderError {
+  OK,
+  WrongControlField,
+  WrongCrcField,
+  WrongStatusField
+};
+
 class Encoder {
+public:
+  EncoderError error = OK;
  private:
+  CrcHelper crcHelper;
   /* data */
  public:
   Encoder(HardwareSerial* serial, uint8_t renPin, uint8_t dePin);
   ~Encoder();
   uint32_t requestData();
+  uint32_t readData();
 
   uint8_t ren;
   uint8_t de;
   HardwareSerial* pSerial;
 };
 
-
-
-#endif
+#endif //ENCODER_H

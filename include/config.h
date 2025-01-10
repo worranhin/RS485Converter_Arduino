@@ -27,4 +27,7 @@
 
 #define BUILTIN_LED PA1
 
+#define LED_ON HIGH
+#define LED_OFF LOW
+
 #endif

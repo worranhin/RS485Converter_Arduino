@@ -141,6 +141,7 @@ void setup() {
   digitalWrite(MASTER485_REN, LOW);
   digitalWrite(MASTER485_DE, LOW);
 
+  Serial1.setTimeout(1000);
   Serial1.begin(2500000);
 
 #ifndef DEBUG_ONE_ENCODER
@@ -166,7 +167,7 @@ void setup() {
 }
 
 void loop() {
-  RequestEncoderLoop_block();
+  // RequestEncoderLoop_block();
   ResponseMasterLoop();
   BlinkLoop();
   // TestResponseMasterLoop();
@@ -227,35 +228,6 @@ void RequestEncoderLoop_block() {
 // }
 #endif
 
-  // DEBUG
-
-  // uint32_t value1 = filter1.getMedian();
-  // uint32_t value2 = filter2.getMedian();
-  // uint32_t value3 = filter3.getMedian();
-
-  // // uint8_t data1[3] = {(uint8_t)(value1), (uint8_t)(value1 >> 8),
-  // //                     (uint8_t)(value1 >> 16)};
-  // // uint8_t data2[3] = {(uint8_t)(value2), (uint8_t)(value2 >> 8),
-  // //                     (uint8_t)(value2 >> 16)};
-  // // uint8_t data3[3] = {(uint8_t)(value3), (uint8_t)(value3 >> 8),
-  // //                     (uint8_t)(value3 >> 16)};
-
-  // digitalWrite(MASTER485_REN, HIGH);
-  // digitalWrite(MASTER485_DE, HIGH);
-  // // Serial6.write(data1, 3);
-  // // Serial6.write(data2, 3);
-  // // Serial6.write(data3, 3);
-  // // double angle1 = (double)value1 / (double)pow(2, 19) * 360.0;
-  // // double angle2 = (double)value2 / (double)pow(2, 19) * 360.0;
-  // // double angle3 = (double)value3 / (double)pow(2, 19) * 360.0;
-  // // Serial6.printf("%f, %f, %f\n", angle1, angle2, angle3);
-  // Serial6.printf("%d, %d, %d\n", value1, value2, value3);
-
-  // Serial6.flush();
-  // digitalWrite(MASTER485_REN, LOW);
-  // digitalWrite(MASTER485_DE, LOW);
-
-  // DEBUG END
 
 #ifdef DEBUG_SAMPLE_FREQ
   endSampleTime = micros();
@@ -334,13 +306,17 @@ void ResponseMasterLoop() {
     uint8_t code = 0;
     uint32_t value1, value2, value3;
     uint8_t data1[3], data2[3], data3[3];
+
+    if (Serial6.available() == 0)
+      return;
     Serial6.readBytes(&code, 1);
 
     switch (code)
     {
     case 0x01:
       // value1 = filter1.getMedian();
-      toTransData(encoderData[0], data1);
+      value1 = Encoder1.readData();
+      toTransData(value1, data1);
       digitalWrite(MASTER485_REN, HIGH);
       digitalWrite(MASTER485_DE, HIGH);
       Serial6.write(data1, 3);
@@ -351,7 +327,8 @@ void ResponseMasterLoop() {
 
     case 0x02:
       // value2 = filter2.getMedian();
-      toTransData(encoderData[1], data2);
+      value2 = Encoder2.readData();
+      toTransData(value2, data2);
       digitalWrite(MASTER485_REN, HIGH);
       digitalWrite(MASTER485_DE, HIGH);
       Serial6.write(data2, 3);
@@ -362,7 +339,8 @@ void ResponseMasterLoop() {
 
     case 0x03:
       // value3 = filter3.getMedian();
-      toTransData(encoderData[2], data3);
+      value3 = Encoder3.readData();
+      toTransData(value3, data3);
       digitalWrite(MASTER485_REN, HIGH);
       digitalWrite(MASTER485_DE, HIGH);
       Serial6.write(data3, 3);
@@ -375,10 +353,12 @@ void ResponseMasterLoop() {
       // value1 = filter1.getMedian();
       // value2 = filter2.getMedian();
       // value3 = filter3.getMedian();
-
-      toTransData(encoderData[0], data1);
-      toTransData(encoderData[1], data2);
-      toTransData(encoderData[2], data3);
+      value1 = Encoder1.readData();
+      value2 = Encoder2.readData();
+      value3 = Encoder3.readData();
+      toTransData(value1, data1);
+      toTransData(value2, data2);
+      toTransData(value3, data3);
 
       digitalWrite(MASTER485_REN, HIGH);
       digitalWrite(MASTER485_DE, HIGH);
@@ -389,37 +369,20 @@ void ResponseMasterLoop() {
       digitalWrite(MASTER485_REN, LOW);
       digitalWrite(MASTER485_DE, LOW);
       break;
+
+    case 0x11:
+      value1 = Encoder1.readData();
+      digitalWrite(MASTER485_REN, HIGH);
+      digitalWrite(MASTER485_DE, HIGH);
+      Serial6.println(value1);
+      Serial6.flush();
+      digitalWrite(MASTER485_REN, LOW);
+      digitalWrite(MASTER485_DE, LOW);
+      break;
     
     default:
       break;
     }
-//     if (code == 0x01) {
-//       uint32_t value1 = filter1.getMedian();
-// #ifndef DEBUG_ONE_ENCODER
-//       uint32_t value2 = filter2.getMedian();
-//       uint32_t value3 = filter3.getMedian();
-// #endif
-
-//       uint8_t data1[3] = {(uint8_t)(value1), (uint8_t)(value1 >> 8),
-//                           (uint8_t)(value1 >> 16)};
-// #ifndef DEBUG_ONE_ENCODER
-//       uint8_t data2[3] = {(uint8_t)(value2), (uint8_t)(value2 >> 8),
-//                           (uint8_t)(value2 >> 16)};
-//       uint8_t data3[3] = {(uint8_t)(value3), (uint8_t)(value3 >> 8),
-//                           (uint8_t)(value3 >> 16)};
-// #endif
-
-//       digitalWrite(MASTER485_REN, HIGH);
-//       digitalWrite(MASTER485_DE, HIGH);
-//       Serial6.write(data1, 3);
-// #ifndef DEBUG_ONE_ENCODER
-//       Serial6.write(data2, 3);
-//       Serial6.write(data3, 3);
-// #endif
-//       Serial6.flush();
-//       digitalWrite(MASTER485_REN, LOW);
-//       digitalWrite(MASTER485_DE, LOW);
-//     }
   }
 }
 
